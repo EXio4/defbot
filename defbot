@@ -1,0 +1,226 @@
+#!/bin/bash
+#       defbot
+#       
+#       Copyright 2012 EXio4
+#       
+#       This program is free software; you can redistribute it and/or modify
+#       it under the terms of the GNU General Public License as published by
+#       the Free Software Foundation; either version 2 of the License, or
+#       (at your option) any later version.
+#       
+#       This program is distributed in the hope that it will be useful,
+#       but WITHOUT ANY WARRANTY; without even the implied warranty of
+#       MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#       GNU General Public License for more details.
+#       
+#       You should have received a copy of the GNU General Public License
+#       along with this program; if not, write to the Free Software
+#       Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
+#       MA 02110-1301, USA.
+
+## Changelog:
+# 08/06/2012 EXio4
+# v0.1  Primera version
+
+## TODO List:
+# (DRAE)
+## Agregar soporte del "api" en json y la posibilidad de parsear el html sin usar api('s) intermedias.
+# (IRC)
+## Agregar parseador incorporado
+## Integrar el main loop, agregando soporte de autojoin al tener cloak (Freenode)
+## Agregar soporte de SASL Plain
+## Implementar sockets usando netcat
+## Realizar un "auto split" de la salida (512 bytes contando el \r\n final...)
+## Agregar buffer de salida para evitar floodear
+# (DefBot)
+## Agregar control de forks
+## Realizar un catch a los signals normales.
+###
+
+VERSION=0.1a
+
+# Variables usadas por defbot (Realmente IRC:: y DefBot::).
+
+# IP o Host del servidor al cual conectarse
+host="irc.freenode.net"
+
+# Puerto
+port=6667
+
+# Password del servidor
+# dejar esto sin valor significa que no se usa/no hay
+# En freenode puede usarse en el formato "cuenta:password" para identificarse en una cuenta registrada con nickserv.
+pass="$@" 
+
+# IDENT a usar (en caso de no tener un identd corriendo)
+ident="defbot"
+
+# Nombre "real" a usar en el servidor.
+
+realname="Def Bot $VERSION"
+# Nick del bot
+
+nick="defbot"
+
+# Canal a entrar
+
+chan="#zbyte"
+ 
+# Limite de resultados (al no especificar definicion)
+
+deflimit=2 # no se recomienda un numero mayor de 2...
+ 
+#########
+# DRAE:: 
+
+# Variables de DRAE::
+
+## Modo del API a usar, por ahora solo soportado XML
+drae_apimode="xml" 
+
+drae_apisite="http://rae-quel.appspot.com/"
+ 
+drae_getcmd="wget"
+drae_getcmd_params="-qO-"
+
+# array con el resultado de DRAE::def
+drae_defs=()
+ 
+DRAE::def() { 
+
+	local api="${drae_apisite}"
+	local wget="${drae_getcmd}"
+	local type=''
+	local query=$(echo "$1" | tr '[A-Z]' '[a-z]')
+	drae_defs=()
+	if [[ -z "$1" ]]; then
+		return 1
+	fi
+	case "${drae_apimode}" in
+		xml|XML)
+			api="${api}/w/xml/"
+			type=xml
+		;;
+		*)
+			## no soportado
+			return 2;
+		;;
+	esac
+	case "${type}" in
+		xml)
+			local OLDIFS="$IFS"
+			IFS=$'\n'
+			drae_defs=($(${wget} ${drae_getcmd_params} "${api}$query" | sed -n 's|<definition>[ \t]*\(.*\)</definition>|\1|p'))
+			IFS="$OLDIFS"
+			unset OLDIFS
+			return 0;
+		;;
+	esac
+}
+
+## DRAE:def test
+#if DRAE::def "$1"; then
+#	for i in ${!drae_defs[@]}; do
+#		echo "Definicion $i: ${drae_defs[$i]}"
+#	done
+#	if [[ -z "${drae_defs}" ]]; then
+#		echo "Definicion no encontrada"
+#	fi
+#else
+#	echo "Ocurrio un error al ejecutar DRAE::def"
+#fi
+
+
+##########
+# IRC::
+
+IRC::raw() {
+	printf '%s\n' "$@"
+	printf '%s\r\n' "$@" >&3
+}
+
+IRC::read() {
+	read -r -u 3 $@
+}
+
+IRC::connect() {
+	exec 3<>/dev/tcp/$host/$port
+	[[ "$pass" ]] && IRC::raw "PASS :$pass"
+	IRC::raw "USER $ident * * :$realname"
+	IRC::raw "NICK $nick"
+}
+
+
+############
+
+
+DefBot::definir() {
+	local bold=$'\x02'
+	local sp=999
+	local word i final
+	if [[ -z "$1" ]]; then
+		return 1
+	fi
+	if [[ "$1" =~ ^[0-9]*$ ]]; then
+		# el primer parametro es un numero...
+		sp="$1"
+		let sp-- # el comando sera llamando empezando la cuenta desde 1, no desde 0. 
+		[[ -z "$2" ]] && return 1
+		word="$2"
+	else
+		word="$1"
+	fi
+	DRAE::def "$word"
+	local s=${drae_defs[$sp]}
+	let sp++
+	if [[ "$s" ]]; then
+		final="Definicion ${bold}${sp}${bold} encontrada: $s"
+	else
+		final="${bold}(${bold}Definiciones${bold})${bold}"
+		for (( i=1; i<=${deflimit}; i++ )); do
+			sp="$i"
+			let sp--;
+			if [[ -z ${drae_defs[$sp]} ]]; then
+				break ## no hay mas definciones...
+			fi
+			final="${final} ${bold}|| (${i})${bold}${drae_defs[$sp]}"
+		done
+	fi
+	if [[ -z "${drae_defs}" ]]; then
+		final="${bold}No se han encontrado definiciones.${bold}"
+	fi
+	echo "$final"	
+}
+#DefBot::definir "$@"
+
+DefBot::run() {
+	local raw
+	local from cmd _chan msg
+	while IRC::read raw; do
+			raw=${raw//`echo -e '\r'`}
+			read -r from cmd _chan msg <<<"$raw"
+			if [[ "${from}" == "PING" ]]; then
+				IRC::raw "PONG $cmd"
+				continue
+			fi			
+			echo "$raw">&2
+			case "$cmd" in
+				376)
+					[[ "$chan" ]] && IRC::raw "JOIN $chan"
+				;;
+				PRIVMSG)
+					msg="${msg#:}"
+					case "$msg" in
+						'.def '*)
+							msg="${msg#\.def}"
+							IRC::raw "PRIVMSG ${_chan} :`DefBot::definir $msg`" &
+							echo "@Fork::New [$!]"
+						;;
+					esac					
+				;;
+			esac
+	done
+}
+
+IRC::connect
+DefBot::run
