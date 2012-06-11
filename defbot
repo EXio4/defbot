@@ -199,6 +199,10 @@ DefBot::def() {
 DefBot::ForkError() {
 	IRC::raw "PRIVMSG ${_chan} :No es posible iniciar un nuevo proceso."
 }
+DefBot::close() {
+	IRC::raw "QUIT :DefBot $VERSION [ https://github.com/EXio4/defbot/ ]"
+}
+trap 'DefBot::close' SIGINT SIGTERM 
 DefBot::run() {
 	local raw
 	local from cmd _chan msg
