@@ -22,24 +22,9 @@
 # 08/06/2012 EXio4
 # v0.1  Primera version
 
-## TODO List:
-# (DRAE)
-## Agregar soporte del "api" en json y la posibilidad de parsear el html sin usar api('s) intermedias.
-# (IRC)
-## Agregar parseador incorporado
-## Integrar el main loop, agregando soporte de autojoin al tener cloak (Freenode)
-## Agregar soporte de SASL Plain
-## Implementar sockets usando netcat
-## Realizar un "auto split" de la salida (512 bytes contando el \r\n final...)
-## Agregar buffer de salida para evitar floodear
-# (DefBot)
-## Agregar control de forks
-## Realizar un catch a los signals normales.
-###
-
 VERSION=0.1a
 
-# Variables usadas por defbot (Realmente IRC:: y DefBot::).
+# Variables usadas por defbot (IRC:,Fork::, DefBot::).
 
 # IP o Host del servidor al cual conectarse
 host="irc.freenode.net"
@@ -69,6 +54,9 @@ chan="#zbyte"
 # Limite de resultados (al no especificar definicion)
 
 deflimit=2 # no se recomienda un numero mayor de 2...
+
+# Maxima cantidad de definiciones a realizar al mismo tiempo.
+MAXFORKS=2
  
 #########
 # DRAE:: 
@@ -154,6 +142,19 @@ IRC::connect() {
 ############
 
 
+Fork::New() {
+	local callback="$1";shift
+	if (( `jobs | wc -l` > ${MAXFORKS} )); then
+		$callback
+		return $?
+	fi
+	{
+		$@
+	} &
+}
+
+##
+
 DefBot::definir() {
 	local bold=$'\x02'
 	local sp=999
@@ -192,7 +193,12 @@ DefBot::definir() {
 	echo "$final"	
 }
 #DefBot::definir "$@"
-
+DefBot::def() {
+	IRC::raw "PRIVMSG ${1} :`DefBot::definir $2`" 
+}
+DefBot::ForkError() {
+	IRC::raw "PRIVMSG ${_chan} :No es posible iniciar un nuevo proceso."
+}
 DefBot::run() {
 	local raw
 	local from cmd _chan msg
@@ -213,8 +219,8 @@ DefBot::run() {
 					case "$msg" in
 						'.def '*)
 							msg="${msg#\.def}"
-							IRC::raw "PRIVMSG ${_chan} :`DefBot::definir $msg`" &
-							echo "@Fork::New [$!]"
+							Fork::New "DefBot::ForkError ${_chan}" DefBot::def "${_chan}" "$msg"
+							echo "@Fork::New"
 						;;
 					esac					
 				;;
