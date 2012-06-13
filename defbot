@@ -19,10 +19,16 @@
 #       MA 02110-1301, USA.
 
 ## Changelog:
+# 13/06/2012 EXio4
+# v0.1a Liberada version alpha, mejoras respecto a la version anterior:
+## Agregado control de forks (ahora se pueden limitar la cantidad de "forks" a iniciar, cada fork es una definicion [en paralelo])
+## Ahora al enviar SIGINT o SIGTERM (Ctrl-C en el terminal donde corre el bot o kill al bot) envia un QUIT al servidor y espera respuesta
+## Cambio sencillo en la organizacion del IRC:: y DefBot::, ahora es un (poco) mas dinamico, usando callbacks sencilos. (No terminado "completamente")
+#
 # 08/06/2012 EXio4
-# v0.1  Primera version
+# v0.1  Primera version (pre-alpha)
 
-VERSION=0.1a
+VERSION=0.1b
 
 # Variables usadas por defbot (IRC:,Fork::, DefBot::).
 
@@ -121,7 +127,7 @@ DRAE::def() {
 
 ##########
 # IRC::
-
+declare -A IRC
 IRC::raw() {
 	printf '%s\n' "$@"
 	printf '%s\r\n' "$@" >&3
@@ -136,6 +142,36 @@ IRC::connect() {
 	[[ "$pass" ]] && IRC::raw "PASS :$pass"
 	IRC::raw "USER $ident * * :$realname"
 	IRC::raw "NICK $nick"
+}
+
+IRC::run() {
+	local raw
+	local from cmd _chan msg
+	while IRC::read raw; do
+			raw=${raw//`echo -e '\r'`}
+			read -r from cmd _chan msg <<<"$raw"
+			if [[ "${from}" == "PING" ]]; then
+				IRC::raw "PONG $cmd"
+				continue
+			fi			
+			echo "$raw">&2
+			case "$cmd" in
+				376)
+					## 
+					[[ "$chan" ]] && IRC::raw "JOIN $chan"
+				;;
+				*)
+					if [[ "${IRC[$cmd]}" ]]; then
+						echo ">>> ${cmd}"
+						"${IRC[$cmd]}" "$from" "$_chan" "$msg"
+					else
+						if [[ "${IRC[unknown]}" ]]; then
+							"${IRC[unknown]}" "$raw"
+						fi
+					fi
+				;;
+			esac
+	done
 }
 
 
@@ -203,34 +239,21 @@ DefBot::close() {
 	IRC::raw "QUIT :DefBot $VERSION [ https://github.com/EXio4/defbot/ ]"
 }
 trap 'DefBot::close' SIGINT SIGTERM 
-DefBot::run() {
-	local raw
-	local from cmd _chan msg
-	while IRC::read raw; do
-			raw=${raw//`echo -e '\r'`}
-			read -r from cmd _chan msg <<<"$raw"
-			if [[ "${from}" == "PING" ]]; then
-				IRC::raw "PONG $cmd"
-				continue
-			fi			
-			echo "$raw">&2
-			case "$cmd" in
-				376)
-					[[ "$chan" ]] && IRC::raw "JOIN $chan"
-				;;
-				PRIVMSG)
-					msg="${msg#:}"
-					case "$msg" in
-						'.def '*)
-							msg="${msg#\.def}"
-							Fork::New "DefBot::ForkError ${_chan}" DefBot::def "${_chan}" "$msg"
-							echo "@Fork::New"
-						;;
-					esac					
-				;;
-			esac
-	done
+
+DefBot::privmsg() {
+	local msg _chan
+	_chan="$2"
+	msg="$3" 
+	msg="${msg#:}"
+	case "$msg" in
+		'.def '*)
+			msg="${msg#\.def}"
+			Fork::New "DefBot::ForkError ${_chan}" DefBot::def "${_chan}" "$msg"
+			echo "@Fork::New"
+		;;
+	esac	
 }
 
+IRC[PRIVMSG]="DefBot::privmsg"
 IRC::connect
-DefBot::run
+IRC::run
