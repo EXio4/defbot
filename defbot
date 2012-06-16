@@ -19,11 +19,14 @@
 #       MA 02110-1301, USA.
 
 ## Changelog:
+# 16/06/2012 EXio4
+# Agregada la opcion de esperar *o no* el cloak en freenode y redes similares.
 # 13/06/2012 EXio4
 # v0.1a Liberada version alpha, mejoras respecto a la version anterior:
+## Cambio sencillo en la organizacion del IRC:: y DefBot::, ahora es un (poco) mas dinamico, usando callbacks sencilos. (No terminado "completamente")
+# 09/06/2012 EXio4
 ## Agregado control de forks (ahora se pueden limitar la cantidad de "forks" a iniciar, cada fork es una definicion [en paralelo])
 ## Ahora al enviar SIGINT o SIGTERM (Ctrl-C en el terminal donde corre el bot o kill al bot) envia un QUIT al servidor y espera respuesta
-## Cambio sencillo en la organizacion del IRC:: y DefBot::, ahora es un (poco) mas dinamico, usando callbacks sencilos. (No terminado "completamente")
 #
 # 08/06/2012 EXio4
 # v0.1  Primera version (pre-alpha)
@@ -64,6 +67,10 @@ deflimit=2 # no se recomienda un numero mayor de 2...
 # Maxima cantidad de definiciones a realizar al mismo tiempo.
 MAXFORKS=2
  
+# Esperar al cloak? yes/no
+WAIT_CLOAK=yes
+
+
 #########
 # DRAE:: 
 
@@ -128,6 +135,7 @@ DRAE::def() {
 ##########
 # IRC::
 declare -A IRC
+joined=0
 IRC::raw() {
 	printf '%s\n' "$@"
 	printf '%s\r\n' "$@" >&3
@@ -143,7 +151,16 @@ IRC::connect() {
 	IRC::raw "USER $ident * * :$realname"
 	IRC::raw "NICK $nick"
 }
-
+IRC::jointimeout() {
+	case "$IRC_JOINTIMEOUT" in
+		"#join")
+			[[ "$chan" ]] && IRC::raw "JOIN $chan"
+		;;
+		"#quit")
+			IRC::close
+		;;
+	esac
+}
 IRC::run() {
 	local raw
 	local from cmd _chan msg
@@ -158,7 +175,20 @@ IRC::run() {
 			case "$cmd" in
 				376)
 					## 
-					[[ "$chan" ]] && IRC::raw "JOIN $chan"
+					if [[ "$WAIT_CLOAK" == "no" && "$joined" == 0 ]]; then
+						[[ "$chan" ]] && IRC::raw "JOIN $chan"
+						joined=1
+					else 
+						{ sleep 10;IRC::jointimeout; } &
+						timeout_pid=$!
+					fi
+				;;
+				396)
+					if [[ "$WAIT_CLOAK" == "on" && "$joined" == 0 ]]; then
+						[[ "$chan" ]] && IRC::raw "JOIN $chan"
+						joined=1
+						kill -9 $timeout_pid 2>/dev/null
+					fi
 				;;
 				*)
 					if [[ "${IRC[$cmd]}" ]]; then
@@ -173,7 +203,13 @@ IRC::run() {
 			esac
 	done
 }
-
+IRC::close() {
+	if [[ "${IRC_CLOSE}" ]]; then
+		${IRC_CLOSE}
+	else
+		IRC::raw "QUIT :"
+	fi
+}
 
 ############
 
@@ -236,6 +272,10 @@ DefBot::ForkError() {
 	IRC::raw "PRIVMSG ${_chan} :No es posible iniciar un nuevo proceso."
 }
 DefBot::close() {
+	if [[ "$@" ]]; then
+		IRC::raw "QUIT :$@"
+		return
+	fi
 	IRC::raw "QUIT :DefBot $VERSION [ https://github.com/EXio4/defbot/ ]"
 }
 trap 'DefBot::close' SIGINT SIGTERM 
@@ -253,7 +293,11 @@ DefBot::privmsg() {
 		;;
 	esac	
 }
-
+### Actions availables:
+#   Join in channel/s anyway >> #join
+#   Quit from IRC          >> #quit   
+IRC_JOINTIMEOUT="#quit"
 IRC[PRIVMSG]="DefBot::privmsg"
+IRC_CLOSE="DefBot::close"
 IRC::connect
 IRC::run
