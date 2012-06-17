@@ -20,6 +20,8 @@
 
 ## Changelog:
 # 16/06/2012 EXio4
+# v0.1b Agregado soporte de SASL Plain, liberada nueva version.
+# 16/06/2012 EXio4
 # Agregada la opcion de esperar *o no* el cloak en freenode y redes similares.
 # 13/06/2012 EXio4
 # v0.1a Liberada version alpha, mejoras respecto a la version anterior:
