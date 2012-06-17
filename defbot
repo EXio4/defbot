@@ -44,7 +44,13 @@ port=6667
 # Password del servidor
 # dejar esto sin valor significa que no se usa/no hay
 # En freenode puede usarse en el formato "cuenta:password" para identificarse en una cuenta registrada con nickserv.
-pass="$@" 
+pass="$1" 
+
+# SASL
+# Usuario y password a usar.
+
+SASL_USER="$2"
+SASL_PASS="$3"
 
 # IDENT a usar (en caso de no tener un identd corriendo)
 ident="defbot"
@@ -147,6 +153,10 @@ IRC::read() {
 
 IRC::connect() {
 	exec 3<>/dev/tcp/$host/$port
+	if [[ "$SASL_USER" ]] && [[ "$SASL_PASS" ]];then
+		SASL=yes
+	fi 
+	[[ "$SASL" ]] && echo "CAP LS">&3
 	[[ "$pass" ]] && IRC::raw "PASS :$pass"
 	IRC::raw "USER $ident * * :$realname"
 	IRC::raw "NICK $nick"
@@ -172,13 +182,77 @@ IRC::run() {
 				continue
 			fi			
 			echo "$raw">&2
+			case "$from" in
+				AUTHENTICATE)
+					[[ "$_SASL_C" = 1 ]] && {
+						case "$cmd" in
+							'+'*)
+								printf "AUTHENTICATE %s\r\n" $(printf '%s\x00%s\x00%s' "$SASL_USER" "$SASL_USER" "$SASL_PASS" | base64) >&3
+								#printf 'AUTHENTICATE %s\r\n' "$z">&3
+							;;
+						esac
+						continue; 
+					}
+				;;
+			esac
+			[[ "$from" = 904 ]] && IRC::raw "CAP END"
+			[[ "$from" = 900 ]] && IRC::raw "CAP END"
 			case "$cmd" in
+				CAP)
+					local b1 b2
+					read b1 b2 <<<"$msg"
+					case "$b1" in
+						LS)
+		############################################
+							if [[ "$b2" = *sasl* ]]; then
+								_SASL=yes
+							else
+								_SASL=no
+							fi
+		#############################################
+							if [[ "$_SASL" = yes ]]; then
+								IRC::raw "CAP REQ :sasl"
+							else
+								echo "---- SERVER NO SUPPORT SASL ----"
+							fi
+						;;
+						ACK)
+							[[ "$b2" = *sasl* ]] && _SASL=yes
+							IRC::raw "AUTHENTICATE PLAIN"
+							_SASL_C=1
+						;;
+						NAK)
+							[[ "$b2" = *sasl* ]] && _SASL=no
+						;;
+					esac
+				;;
+				900) 
+					SASL=log
+					## Now logged
+				;;
+				903)
+					SASL=ok
+					IRC::raw "CAP END"
+					[[ "$chan" ]] && { IRC::raw "JOIN $chan";joined=2; }
+					## OK.
+				;;
+				904)
+					SASL=fail
+					IRC::raw "CAP END"
+					## Failed
+				;;
+				906)
+					IRC::raw "CAP END"
+					SASL=abort
+					## Aborted
+				;;
 				376)
 					## 
 					if [[ "$WAIT_CLOAK" == "no" && "$joined" == 0 ]]; then
 						[[ "$chan" ]] && IRC::raw "JOIN $chan"
 						joined=1
 					else 
+						[[ "$joined" == 2 ]] && continue
 						{ sleep 10;IRC::jointimeout; } &
 						timeout_pid=$!
 					fi
